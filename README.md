@@ -15,6 +15,12 @@ access_key = "Paste your Access Key ID here"
 secret_key = "Paste your Secret Access Key here"
 key_name   = "Paste your Key Pair Name here"
 ```
+Command tạo keypair:
+
+```
+aws ec2 create-key-pair --key-name my-key-pair --query "KeyMaterial" --output text > my-key-pair.pem
+aws ec2 describe-key-pairs --key-name my-key-pair
+```
 
 Sau khi thiết lập xong thì chạy lệnh để Terraform bắt đầu khởi tạo môi trường
 ```
