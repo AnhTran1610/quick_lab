@@ -136,10 +136,10 @@ resource "aws_eip" "one" {
 # 9. Create linux server and install/enable apache2
 
 resource "aws_instance" "web-server-instance" {
-    ami = "ami-0dc2d3e4c0f9ebd18"
+    ami = "ami-09e67e426f25ce0d7"
     instance_type = "t2.micro"
     availability_zone = "us-east-1a"
-    key_name = "ahta-keypair"
+    key_name = var.key_name
 
     network_interface {
       device_index = 0
