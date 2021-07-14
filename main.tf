@@ -9,6 +9,7 @@ terraform {
   required_version = ">= 0.14.9"
 }
 
+
 provider "aws" {
   profile    = "default"
   region     = "us-east-1"
@@ -16,141 +17,148 @@ provider "aws" {
   secret_key = var.secret_key
 }
 
-resource "aws_vpc" "main" {
+# 1. Create VPC
+
+resource "aws_vpc" "prod-vpc" {
   cidr_block = "10.0.0.0/16"
 
   tags = {
-    Name = "Main"
+    Name = "ahta-VPC"
+    Owner = "ahta"
   }
 }
 
-resource "aws_eip" "eib" {
-  vpc = true
-}
+# 2. Create Internet Gateway
 
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.main.id
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.prod-vpc.id
 
   tags = {
-    Name = "IGW"
+    Name = "ahta-InternetGateway"
   }
 }
 
-resource "aws_nat_gateway" "nat_gateway" {
-  allocation_id = aws_eip.eib.id
-  subnet_id     = aws_subnet.public.id
+# 3. Create Custom Route Table
+
+resource "aws_route_table" "prod-route-table" {
+  vpc_id = aws_vpc.prod-vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
+  }
+
+  route {
+    ipv6_cidr_block        = "::/0"
+    egress_only_gateway_id = aws_internet_gateway.gw.id
+  }
 
   tags = {
-    Name = "NAT"
-  }
-
-  # To ensure proper ordering, it is recommended to add an explicit dependency
-  # on the Internet Gateway for the VPC.
-  depends_on = [aws_internet_gateway.igw]
-}
-
-resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.0.0/24"
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "Public"
+    Name = "ahta-RouteTable"
+    Owner = "ahta"
   }
 }
 
-resource "aws_subnet" "private" {
-  vpc_id     = aws_vpc.main.id
+# 4. Create a Subnet
+
+resource "aws_subnet" "subnet-1" {
+  vpc_id =  aws_vpc.prod-vpc.id
   cidr_block = "10.0.1.0/24"
-
+  availability_zone = "us-east-1a"
   tags = {
-    Name = "Private"
+    Name = "ahta-subnet1"
   }
 }
 
-resource "aws_route_table" "public_rt" {
-  vpc_id = aws_vpc.main.id
+# 5. Associate subnet with Route Table
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
-  }
-
-  tags = {
-    Name = "public_rt"
-  }
+resource "aws_route_table_association" "a" {
+  subnet_id      = aws_subnet.subnet-1.id
+  route_table_id = aws_route_table.prod-route-table.id
 }
 
-resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.main.id
+# 6. Create Security Group to allow port 22, 80, 443
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_nat_gateway.nat_gateway.id
-  }
-
-  tags = {
-    Name = "private_rt"
-  }
-}
-
-resource "aws_security_group" "allow_all" {
-  name        = "allow_all"
-  description = "Allow all traffic"
-  vpc_id      = aws_vpc.main.id
+resource "aws_security_group" "allow_web" {
+  name        = "allow_web_traffic"
+  description = "Allow web inbound traffic"
+  vpc_id      =  aws_vpc.prod-vpc.id
 
   ingress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description      = "HTTPS"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description      = "HTTP"
+    from_port        = 80
+    to_port          = 80
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description      = "SSH"
+    from_port        = 22
+    to_port          = 22
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 
   tags = {
-    Name = "allow_all"
+    Name = "ahta-allow_web"
   }
 }
 
-resource "aws_route_table_association" "public_rta" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public_rt.id
+# 7. Create a network interface with an ip in the subnet that was created in step 4
+
+resource "aws_network_interface" "web-server-nic" {
+  subnet_id       = aws_subnet.subnet-1.id
+  private_ips     = ["10.0.1.50"]
+  security_groups = [aws_security_group.allow_web.id]
 }
 
-resource "aws_route_table_association" "private_rta" {
-  subnet_id      = aws_subnet.private.id
-  route_table_id = aws_route_table.private_rt.id
+# 8. Assign an elastic IP to the network interface created in step 7
 
+resource "aws_eip" "one" {
+  vpc                       = true
+  network_interface         = aws_network_interface.web-server-nic.id
+  associate_with_private_ip = "10.0.1.50"
+  depends_on = aws_internet_gateway.gw
 }
 
-resource "aws_instance" "ssh_gateway" {
+# 9. Create linux server and install/enable apache2
 
-  ami                    = "ami-0ab4d1e9cf9a1215a"
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.public.id
-  vpc_security_group_ids = [aws_security_group.allow_all.id]
-  key_name               = var.key_name
+resource "aws_instance" "web-server-instance" {
+    ami = "ami-0dc2d3e4c0f9ebd18"
+    instance_type = "t2.micro"
+    availability_zone = "us-east-1a"
+    key_name = "ahta-keypair"
 
-  tags = {
-    Name = "SSH Gateway"
-  }
-}
+    network_interface {
+      device_index = 0
+      network_interface_id = aws_network_interface.web-server-nic.id
+    }
 
-resource "aws_instance" "protected_server" {
-  ami                    = "ami-0ab4d1e9cf9a1215a"
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.private.id
-  vpc_security_group_ids = [aws_security_group.allow_all.id]
-  key_name               = var.key_name
-
-
-  tags = {
-    Name = "Protected Server"
-  }
+    user_data = <<-EOF
+                #!bin/bash
+                sudo apt update -y
+                sudo apt install apache2 -y
+                sudo systemctl start apache2
+                sudo bash -c 'echo Hello from THE ANH > /var/www/html/index.html'
+                EOF
+    tags = {
+      Name = "ahta-web-server"
+    }
 }

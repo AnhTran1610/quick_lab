@@ -8,8 +8,3 @@ variable "secret_key" {
   description = "Secret Access Key."
   sensitive   = true
 }
-variable "key_name" {
-  type        = string
-  description = "Key Pairs."
-  sensitive   = true
-}
